@@ -149,10 +149,11 @@ void filesystem_purge_old_file(const char *name) {
         bDel = true;
       }
     } else if (strcmp(name, szTemp) == 0) {
-      // Fallback: exact match (same file, no underscore)
+      // Same file (exact match, no underscore to compare prefixes)
       Log_info("Deleting older version of plugin image %s - %s", name, file.name());
       bDel = true;
-    } else if ((uint32_t)now > timestamp + 60 * 60 * 24) { // More than 24h old, or no timestamp
+    } else if (timestamp > 0 && (uint32_t)now > timestamp + 60 * 60 * 24) {
+      // Only delete if we could extract a valid timestamp and it's older than 24h
       Log_info("Deleting image older than 24h - %s", file.name());
       bDel = true;
     }
@@ -224,13 +225,7 @@ size_t filesystem_write_to_file(const char *name, uint8_t *in_buffer, size_t siz
  * @return result - true if exists; false - if not exists
  */
 bool filesystem_file_exists(const char *name) {
-  if (FS.exists(name)) {
-    Log_info("file %s exists.", name);
-    return true;
-  } else {
-    Log_info("file %s does not exist.", name);
-    return false;
-  }
+  return FS.exists(name);
 }
 
 /**
@@ -320,9 +315,13 @@ void filesystem_fix_filename(const char *src, char *dest) {
   dest[0] = '/'; // SPIFFS requires files to start with the root dir
   iLen = strlen(src);
   if (iLen > 31) {
-    memcpy(&dest[1], src, 7);          // first 7 chars are "plugin-" or "mashup-"
-    strcpy(&dest[8],
-           &src[iLen - 17]); // get the prefix name and unique id plus timestamp (e.g. mashup-066cc3-1771674964)
+    // Find the first '_' to preserve the plugin identity prefix
+    const char *underscore = strchr(src, '_');
+    int prefixLen = underscore ? (int)(underscore - src + 1) : 7; // include the '_'
+    if (prefixLen > 12) prefixLen = 7; // fallback if prefix is too long
+    memcpy(&dest[1], src, prefixLen);    // keep "plugin_" prefix with underscore
+    strcpy(&dest[1 + prefixLen],
+           &src[iLen - (31 - prefixLen)]); // fill remaining with the unique tail
   } else {
     strncpy(&dest[1], src, 31); // use it as-is
   }

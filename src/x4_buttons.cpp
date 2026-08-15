@@ -71,6 +71,7 @@ X4Button x4_poll_buttons_after_wakeup(void)
   X4Button last_button = X4_BTN_NONE;
   int debounce_count = 0;
   unsigned long poll_start = millis();
+  unsigned long quick_check_end = poll_start + 200;
 
   while (millis() - poll_start < X4_BUTTON_POLL_MS)
   {
@@ -104,6 +105,12 @@ X4Button x4_poll_buttons_after_wakeup(void)
     {
       last_button = X4_BTN_NONE;
       debounce_count = 0;
+    }
+
+    // Early exit: if past quick-check window and no button seen at all
+    if (millis() > quick_check_end && last_button == X4_BTN_NONE && debounce_count == 0)
+    {
+      return X4_BTN_NONE;
     }
 
     delay(X4_BUTTON_POLL_INTERVAL_MS);

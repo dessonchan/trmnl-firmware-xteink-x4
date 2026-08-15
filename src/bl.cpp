@@ -1114,7 +1114,9 @@ void bl_init(void)
   Log_info("Firmware version %s", Messages::firmware_version().c_str());
   Log_info("Arduino version %d.%d.%d", ESP_ARDUINO_VERSION_MAJOR, ESP_ARDUINO_VERSION_MINOR, ESP_ARDUINO_VERSION_PATCH);
   Log_info("ESP-IDF version %d.%d.%d", ESP_IDF_VERSION_MAJOR, ESP_IDF_VERSION_MINOR, ESP_IDF_VERSION_PATCH);
+#ifndef BOARD_XTEINK_X4
   list_files();
+#endif
   log_nvs_usage();
 
   // DEBUG - test message display
@@ -1333,8 +1335,6 @@ void bl_init(void)
       goToSleep();
     }
   }
-
-  submitStoredLogs();
 
   log_retry = true;
 
@@ -1843,7 +1843,10 @@ static https_request_err_e downloadAndShow()
           bool isJPEG = https.header("Content-Type") == "image/jpeg";
 
           Log.info("%s [%d]: Starting a download at: %d\r\n", __FILE__, __LINE__, systemClock().getTime());
-          heap_caps_check_integrity_all(true);
+#ifdef BOARD_XTEINK_X4
+          if (!x4_is_in_awake_loop())
+#endif
+            heap_caps_check_integrity_all(true);
 
           buffer = nullptr;
           bool buffer_malloc = false;
@@ -1863,9 +1866,16 @@ static https_request_err_e downloadAndShow()
               buffer = (uint8_t *)malloc(counter);
               if (buffer) {
                 buffer_malloc = true;
+                uint8_t readBuf[1024];
                 while (iCount < counter && millis() < (lStartTime + IMAGE_STREAM_INACTIVITY_TIMEOUT_MS)) {
-                  if (stream->available()) {
-                    buffer[iCount++] = stream->read();
+                  int avail = stream->available();
+                  if (avail > 0) {
+                    int toRead = min((size_t)avail, sizeof(readBuf));
+                    if (iCount + toRead > counter) toRead = counter - iCount;
+                    int bytesRead = stream->readBytes(readBuf, toRead);
+                    if (bytesRead <= 0) break;
+                    memcpy(buffer + iCount, readBuf, bytesRead);
+                    iCount += bytesRead;
                     lStartTime = millis(); // reset start time
                   } else { // 15 seconds with no activity => stop trying
                     vTaskDelay(1); // yield to allow time for the data to arrive
@@ -1910,7 +1920,12 @@ static https_request_err_e downloadAndShow()
 
           submitStoredLogs();
 
-          WiFi.disconnect(true); // no need for WiFi, save power starting here
+#ifdef BOARD_XTEINK_X4
+          if (!x4_is_in_awake_loop())
+#endif
+          {
+            WiFi.disconnect(true); // no need for WiFi, save power starting here
+          }
           Log.info("%s [%d]: Received successfully; WiFi off.\r\n", __FILE__, __LINE__);
 
           bool image_reverse = false;

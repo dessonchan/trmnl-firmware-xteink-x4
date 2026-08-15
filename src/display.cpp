@@ -1896,26 +1896,24 @@ File f = FS.open(filename, "r");
 uint8_t *buffer;
 
   if (!f) {
-    Serial.println("Failed to open file!");
+    Log_error("Failed to open file %s", filename);
     *file_size = 0;
     return nullptr;
   }
   *file_size = f.size();
   if (*file_size == 0) {
-    Serial.println("File is empty!");
+    Log_error("File %s is empty", filename);
     f.close();
     return nullptr;
   }
-  Serial.printf("File size to allocate: %d bytes\n", *file_size);
+  Log_info("Allocating %d bytes for %s", *file_size, filename);
   #ifdef CONFIG_SPIRAM
-  Serial.println("Allocating file buffer in PSRAM");
   buffer = (uint8_t *)ps_malloc(*file_size);
   #else
-  Serial.println("Allocating file buffer in regular RAM");
   buffer = (uint8_t *)malloc(*file_size);
   #endif
   if (!buffer) {
-    Serial.println("Memory allocation failed!");
+    Log_error("Memory allocation failed for %s (%d bytes)", filename, *file_size);
     *file_size = 0;
     return nullptr;
   }

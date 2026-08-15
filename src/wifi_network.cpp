@@ -62,11 +62,15 @@ bool connectWithSavedCredentials(void) {
 
   bool connected = WifiCaptivePortal.autoConnect();
   if (connected) {
-    String hostname = getWifiClientHostname();
-    if (MDNS.begin(hostname.c_str())) {
-      Log_info("mDNS started: %s.local", hostname.c_str());
-    } else {
-      Log_error("mDNS failed to start");
+    static bool mdns_started = false;
+    if (!mdns_started) {
+      String hostname = getWifiClientHostname();
+      if (MDNS.begin(hostname.c_str())) {
+        Log_info("mDNS started: %s.local", hostname.c_str());
+        mdns_started = true;
+      } else {
+        Log_error("mDNS failed to start");
+      }
     }
   }
   return connected;
