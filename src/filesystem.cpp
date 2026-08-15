@@ -135,7 +135,21 @@ void filesystem_purge_old_file(const char *name) {
 
     Log_info("Comparing name %s with %s, timestamp %" PRIu32 ", current time %" PRIu32, name, file.name(), timestamp,
              (uint32_t)now);
-    if (strncmp(name, szTemp, 14) == 0) { // older version of the same file
+    // Extract plugin identity: everything before the first '_'
+    // e.g. "pluginA_2026-08-15T06:24:02.045Z" -> "pluginA"
+    // This is used to identify and purge older versions of the same plugin
+    const char *name_prefix_end = strchr(name, '_');
+    const char *file_prefix_end = strchr(file.name(), '_');
+    if (name_prefix_end && file_prefix_end) {
+      size_t name_prefix_len = name_prefix_end - name;
+      size_t file_prefix_len = file_prefix_end - file.name();
+      if (name_prefix_len == file_prefix_len &&
+          strncmp(name, file.name(), name_prefix_len) == 0) {
+        Log_info("Deleting older version of plugin image %s - %s", name, file.name());
+        bDel = true;
+      }
+    } else if (strcmp(name, szTemp) == 0) {
+      // Fallback: exact match (same file, no underscore)
       Log_info("Deleting older version of plugin image %s - %s", name, file.name());
       bDel = true;
     } else if ((uint32_t)now > timestamp + 60 * 60 * 24) { // More than 24h old, or no timestamp

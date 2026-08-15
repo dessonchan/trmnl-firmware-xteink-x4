@@ -28,6 +28,9 @@
 #include <stored_logs.h>
 #include <button.h>
 #include "api-client/submit_log.h"
+#ifdef BOARD_XTEINK_X4
+#include "x4_buttons.h"
+#endif
 #include <api-client/setup.h>
 #include <special_function.h>
 #include <refresh_interval.h>
@@ -380,60 +383,6 @@ bool check_corners_gesture()
   return slider_event == IQS323_GESTURE_HOLD && left && right;
 }
 
-static void update_playlist_order(const char *new_path, const char *prev_path) {
-  String order = preferences.getString(PREFERENCES_PLAYLIST_ORDER_KEY, "");
-  String newStr = String(new_path);
-  String prefix = newStr.substring(0, 14); // same-plugin identity (matches purge logic)
-  String prevStr = String(prev_path);
-
-  if (order.isEmpty()) {
-    preferences.putString(PREFERENCES_PLAYLIST_ORDER_KEY, newStr);
-    return;
-  }
-
-  // Scan list: update in-place if prefix matches (refresh), otherwise build a cleaned list
-  // dropping entries whose files no longer exist (except prev_path, which anchors insertion).
-  bool found = false;
-  String result = "";
-  int start = 0;
-  while (start <= (int)order.length()) {
-    int sep = order.indexOf('|', start);
-    String entry = (sep < 0) ? order.substring(start) : order.substring(start, sep);
-    if (!entry.isEmpty()) {
-      if (!found && entry.startsWith(prefix)) {
-        result += (result.isEmpty() ? "" : "|") + newStr;
-        found = true;
-      } else if (entry == prevStr || filesystem_file_exists(entry.c_str())) {
-        result += (result.isEmpty() ? "" : "|") + entry;
-      }
-      // else: file was purged from filesystem — drop from list
-    }
-    if (sep < 0) break;
-    start = sep + 1;
-  }
-  if (found) { preferences.putString(PREFERENCES_PLAYLIST_ORDER_KEY, result); return; }
-
-  // New plugin — insert right after prev_path's position in the cleaned list
-  String result2 = "";
-  bool inserted = false;
-  start = 0;
-  while (start <= (int)result.length()) {
-    int sep = result.indexOf('|', start);
-    String entry = (sep < 0) ? result.substring(start) : result.substring(start, sep);
-    if (!entry.isEmpty()) {
-      result2 += (result2.isEmpty() ? "" : "|") + entry;
-      if (!inserted && entry == prevStr) {
-        result2 += "|" + newStr;
-        inserted = true;
-      }
-    }
-    if (sep < 0) break;
-    start = sep + 1;
-  }
-  if (!inserted) result2 += (result2.isEmpty() ? "" : "|") + newStr;
-  preferences.putString(PREFERENCES_PLAYLIST_ORDER_KEY, result2);
-}
-
 static void show_cached_image_by_offset(int offset) {
   String order = preferences.getString(PREFERENCES_PLAYLIST_ORDER_KEY, "");
 
@@ -711,6 +660,145 @@ void process_iqs323_data(void)
 
 #endif
 
+// ############################ PLAYLIST ORDER (shared by TRMNL_X and X4) #############################
+static void update_playlist_order(const char *new_path, const char *prev_path) {
+  String order = preferences.getString(PREFERENCES_PLAYLIST_ORDER_KEY, "");
+  String newStr = String(new_path);
+  // Extract plugin identity: everything before the first '_'
+  // e.g. "pluginA_2026-08-15T06:24:02.045Z" -> "pluginA"
+  int underscorePos = newStr.indexOf('_');
+  String prefix = (underscorePos > 0) ? newStr.substring(0, underscorePos) : newStr;
+  String prevStr = String(prev_path);
+
+  if (order.isEmpty()) {
+    preferences.putString(PREFERENCES_PLAYLIST_ORDER_KEY, newStr);
+    Log_info("X4 playlist: initialized with '%s'", newStr.c_str());
+    return;
+  }
+
+  // Scan list: update in-place if prefix matches (refresh), otherwise build a cleaned list
+  // dropping entries whose files no longer exist (except prev_path, which anchors insertion).
+  bool found = false;
+  String result = "";
+  int start = 0;
+  while (start <= (int)order.length()) {
+    int sep = order.indexOf('|', start);
+    String entry = (sep < 0) ? order.substring(start) : order.substring(start, sep);
+    if (!entry.isEmpty()) {
+      if (!found && entry.startsWith(prefix)) {
+        result += (result.isEmpty() ? "" : "|") + newStr;
+        found = true;
+      } else if (entry == prevStr || filesystem_file_exists(entry.c_str())) {
+        result += (result.isEmpty() ? "" : "|") + entry;
+      }
+      // else: file was purged from filesystem — drop from list
+    }
+    if (sep < 0) break;
+    start = sep + 1;
+  }
+  if (found) {
+    preferences.putString(PREFERENCES_PLAYLIST_ORDER_KEY, result);
+    return;
+  }
+
+  // New plugin — insert right after prev_path's position in the cleaned list
+  String result2 = "";
+  bool inserted = false;
+  start = 0;
+  while (start <= (int)result.length()) {
+    int sep = result.indexOf('|', start);
+    String entry = (sep < 0) ? result.substring(start) : result.substring(start, sep);
+    if (!entry.isEmpty()) {
+      result2 += (result2.isEmpty() ? "" : "|") + entry;
+      if (!inserted && entry == prevStr) {
+        result2 += "|" + newStr;
+        inserted = true;
+      }
+    }
+    if (sep < 0) break;
+    start = sep + 1;
+  }
+  if (!inserted) result2 += (result2.isEmpty() ? "" : "|") + newStr;
+  preferences.putString(PREFERENCES_PLAYLIST_ORDER_KEY, result2);
+  Log_info("X4 playlist: added '%s', order='%s'", newStr.c_str(), result2.c_str());
+}
+// ############################ PLAYLIST ORDER (shared by TRMNL_X and X4) #############################
+
+// ############################ X4 PLAYLIST NAVIGATION #############################
+#ifndef BOARD_TRMNL_X
+static void show_cached_image_by_offset(int offset) {
+  String order = preferences.getString(PREFERENCES_PLAYLIST_ORDER_KEY, "");
+  String currPath = preferences.getString(PREFERENCES_CURRENT_PATH_KEY, "");
+  String lastPath = preferences.getString(PREFERENCES_LAST_PATH_KEY, "");
+  String browsePath = preferences.getString(PREFERENCES_BROWSE_PATH_KEY, "");
+
+  Log_info("X4 nav: offset=%d, playlist='%s', browse='%s'", offset, order.c_str(), browsePath.c_str());
+
+  // When in X4 awake loop, don't call goToSleep() — just display and return
+#ifdef BOARD_XTEINK_X4
+  #define X4_RETURN_AFTER_DISPLAY() { if (x4_is_in_awake_loop()) { return; } else { goToSleep(); } }
+#else
+  #define X4_RETURN_AFTER_DISPLAY() { goToSleep(); }
+#endif
+
+  if (order.isEmpty()) {
+    String path = (offset > 0)
+      ? currPath
+      : lastPath;
+    Log_info("X4 nav: no playlist, fallback path='%s'", path.c_str());
+    if (path.isEmpty()) { Log_info("No cached image for gesture"); return; }
+    int file_size = 0;
+    uint8_t *buf = display_read_file(path.c_str(), &file_size);
+    if (buf && file_size > 0) {
+      display_show_image(buf, file_size, true);
+      DisplayedImage::remember(path.c_str());
+      X4_RETURN_AFTER_DISPLAY();
+    }
+    return;
+  }
+
+  char images[MAX_CACHED_IMAGES][36];
+  int count = 0;
+  int start = 0;
+  while (start <= (int)order.length() && count < MAX_CACHED_IMAGES) {
+    int sep = order.indexOf('|', start);
+    String entry = (sep < 0) ? order.substring(start) : order.substring(start, sep);
+    if (!entry.isEmpty() && filesystem_file_exists(entry.c_str())) {
+      strncpy(images[count], entry.c_str(), 35);
+      images[count][35] = '\0';
+      count++;
+    }
+    if (sep < 0) break;
+    start = sep + 1;
+  }
+
+  if (count == 0) { Log_info("No cached images available"); return; }
+  if (count == 1) { Log_info("Only 1 cached image, nothing to navigate"); return; }
+
+  if (browsePath.isEmpty()) {
+    browsePath = lastPath.isEmpty() ? currPath : lastPath;
+  }
+
+  int cur_idx = count - 1;
+  for (int i = 0; i < count; i++) {
+    if (browsePath == String(images[i])) { cur_idx = i; break; }
+  }
+
+  int new_idx = (cur_idx + offset + count) % count;
+  Log_info("X4 nav: %d/%d -> %d (%s)", cur_idx, count, new_idx, images[new_idx]);
+
+  int file_size = 0;
+  uint8_t *buf = display_read_file(images[new_idx], &file_size);
+  if (!buf || file_size == 0) { Log_info("Failed to read %s", images[new_idx]); return; }
+
+  preferences.putString(PREFERENCES_BROWSE_PATH_KEY, String(images[new_idx]));
+  display_show_image(buf, file_size, true);
+  DisplayedImage::remember(images[new_idx]);
+  X4_RETURN_AFTER_DISPLAY();
+}
+#endif // !BOARD_TRMNL_X
+// ############################ X4 PLAYLIST NAVIGATION #############################
+
 /**
  * @brief Function to init business logic module
  * @param none
@@ -817,6 +905,21 @@ void bl_init(void)
       resetDeviceCredentials();
     }
     Log_info("button handling end");
+#ifdef BOARD_XTEINK_X4
+    // X4: After power-button wakeup, poll ADC side buttons for navigation
+    X4Button x4btn = x4_poll_buttons_after_wakeup();
+    switch (x4btn)
+    {
+    case X4_BTN_VOLUME_UP:
+      show_cached_image_by_offset(-1);
+      break;
+    case X4_BTN_VOLUME_DOWN:
+      show_cached_image_by_offset(+1);
+      break;
+    default:
+      break;
+    }
+#endif // BOARD_XTEINK_X4
   }
   else
   {
@@ -1568,9 +1671,7 @@ static https_request_err_e downloadAndShow()
       if (!_curPath.isEmpty() && (_curPath != String(szTemp) || _lastPath.isEmpty()))
         preferences.putString(PREFERENCES_LAST_PATH_KEY, _curPath);
       preferences.putString(PREFERENCES_CURRENT_PATH_KEY, String(szTemp));
-      #ifdef BOARD_TRMNL_X
       update_playlist_order(szTemp, _curPath.c_str());
-      #endif
       preferences.putString(PREFERENCES_BROWSE_PATH_KEY, String(szTemp));
       return result;
   }
@@ -1834,9 +1935,7 @@ static https_request_err_e downloadAndShow()
             if (!_curPath.isEmpty() && (_curPath != String(szTemp) || _lastPath.isEmpty()))
               preferences.putString(PREFERENCES_LAST_PATH_KEY, _curPath);
             preferences.putString(PREFERENCES_CURRENT_PATH_KEY, String(szTemp));
-            #ifdef BOARD_TRMNL_X
             update_playlist_order(szTemp, _curPath.c_str());
-            #endif
             preferences.putString(PREFERENCES_BROWSE_PATH_KEY, String(szTemp));
           }
           else
@@ -2557,6 +2656,74 @@ static void resetDeviceCredentials(void)
 void goToSleep(void)
 {
   Log.info("%s [%d]: go to sleep\r\n", __FILE__, __LINE__);
+
+#ifdef BOARD_XTEINK_X4
+  // If USB is connected, enter awake loop instead of deep sleep.
+  // The awake loop polls ADC buttons for navigation and does in-place API refresh.
+  // Only exits when USB is disconnected.
+  // Skip if already in awake loop (prevents recursion from show_cached_image_by_offset -> goToSleep).
+  if (!x4_is_in_awake_loop() && x4_is_usb_connected())
+  {
+    Log_info("X4: USB connected, staying awake for button navigation");
+    x4_awake_loop_enter();
+
+    unsigned long cooldown_until = 0;
+    unsigned long last_refresh = millis();
+    uint32_t refresh_interval_ms = refreshInterval.seconds() * 1000UL;
+
+    while (true)
+    {
+      if (!x4_is_usb_connected())
+      {
+        Log_info("X4: USB disconnected, going to sleep");
+        break;
+      }
+
+      X4Button btn = x4_read_button();
+      if (btn == X4_BTN_VOLUME_UP || btn == X4_BTN_VOLUME_DOWN)
+      {
+        if (millis() >= cooldown_until)
+        {
+          if (btn == X4_BTN_VOLUME_UP)
+          {
+            Log_info("X4: Volume Up pressed");
+            show_cached_image_by_offset(-1);
+          }
+          else
+          {
+            Log_info("X4: Volume Down pressed");
+            show_cached_image_by_offset(+1);
+          }
+          cooldown_until = millis() + X4_BUTTON_COOLDOWN_MS;
+        }
+      }
+
+      // Check if it's time for a scheduled API refresh — do it in-place
+      if (millis() - last_refresh >= refresh_interval_ms)
+      {
+        Log_info("X4: Refresh interval elapsed, doing in-place API refresh");
+        // downloadAndShow() internally disconnects WiFi after downloading,
+        // so we need to reconnect before calling it
+        if (WiFi.status() != WL_CONNECTED)
+        {
+          Log_info("X4: Reconnecting WiFi for refresh");
+          WiFi.mode(WIFI_STA);
+          connectWithSavedCredentials();
+        }
+        https_request_err_e result = downloadAndShow();
+        Log_info("X4: API refresh result=%d", result);
+        last_refresh = millis();
+        // Re-read refresh interval in case server changed it
+        refresh_interval_ms = refreshInterval.seconds() * 1000UL;
+      }
+
+      delay(X4_AWAKE_POLL_INTERVAL_MS);
+    }
+
+    x4_awake_loop_exit();
+  }
+#endif
+
   submitStoredLogs();
 
 // DEBUG - workaround to prevent crash in the WiFi stack of unknown origin
