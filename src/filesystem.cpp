@@ -311,17 +311,27 @@ void writeImageToFile(const char *name, uint8_t *in_buffer, size_t size) {
 void filesystem_fix_filename(const char *src, char *dest) {
   int iLen;
 
-  // SPIFFS only allows 32 bytes for the name, so if it's too long, fix it
+  // SPIFFS only allows 32 bytes for the name (31 chars + null terminator),
+  // so if it's too long, fix it while preserving the plugin identity prefix.
+  // Format: /<prefix>_<tail> where prefix is up to 8 chars before the first '_'
+  // and tail is the remaining unique portion from the end of the original name.
   dest[0] = '/'; // SPIFFS requires files to start with the root dir
   iLen = strlen(src);
   if (iLen > 31) {
-    // Find the first '_' to preserve the plugin identity prefix
     const char *underscore = strchr(src, '_');
-    int prefixLen = underscore ? (int)(underscore - src + 1) : 7; // include the '_'
-    if (prefixLen > 12) prefixLen = 7; // fallback if prefix is too long
-    memcpy(&dest[1], src, prefixLen);    // keep "plugin_" prefix with underscore
-    strcpy(&dest[1 + prefixLen],
-           &src[iLen - (31 - prefixLen)]); // fill remaining with the unique tail
+    int prefixLen;
+    if (underscore && (underscore - src) <= 8) {
+      prefixLen = (int)(underscore - src); // keep full prefix if <= 8 chars
+    } else if (underscore) {
+      prefixLen = 8; // truncate long prefix to 8 chars
+    } else {
+      prefixLen = 7; // no underscore, use first 7 chars (original behavior)
+    }
+    memcpy(&dest[1], src, prefixLen);              // prefix
+    dest[1 + prefixLen] = '_';                     // separator
+    int tailLen = 31 - 1 - prefixLen - 1;          // remaining space
+    strcpy(&dest[1 + prefixLen + 1],
+           &src[iLen - tailLen]);                  // unique tail from end
   } else {
     strncpy(&dest[1], src, 31); // use it as-is
   }
