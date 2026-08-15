@@ -886,6 +886,20 @@ void bl_init(void)
   if (gpio_wakeup)
   {
     Log_info("GPIO wakeup detected (%d)", wakeup_reason);
+#ifdef BOARD_XTEINK_X4
+    // X4: Check if GPIO2 (Volume Down) triggered the wakeup.
+    // When Volume Down is pressed, GPIO2 is pulled LOW via resistor ladder (ADC ≈ 3).
+    // If GPIO2 is LOW on wakeup, skip Power button press reading and go straight to navigation.
+    pinMode(X4_GPIO2_PIN, INPUT_PULLUP); // ensure pull-up is active for reliable read
+    if (digitalRead(X4_GPIO2_PIN) == LOW)
+    {
+      Log_info("X4: Volume Down button wakeup (GPIO2 LOW)");
+      show_cached_image_by_offset(+1); // Volume Down = next screen
+      // Fall through to goToSleep() below
+    }
+    else
+#endif
+    {
     auto button = read_button_presses();
     wait_for_serial();
     Log_info("GPIO wakeup (%d) -> button was read (%s)", wakeup_reason, ButtonPressResultNames[button]);
@@ -920,6 +934,7 @@ void bl_init(void)
       break;
     }
 #endif // BOARD_XTEINK_X4
+    } // end else (Power button wakeup path)
   }
   else
   {
@@ -2786,7 +2801,17 @@ void goToSleep(void)
   esp_sleep_enable_ext1_wakeup(BUTTON_PIN_BITMASK(PIN_INTERRUPT), ESP_EXT1_WAKEUP_ALL_LOW);
 #elif defined(CONFIG_IDF_TARGET_ESP32C3) || defined (CONFIG_IDF_TARGET_ESP32C5)
   pinMode(PIN_INTERRUPT, INPUT); // needed to not immediately wake up
+#ifdef BOARD_XTEINK_X4
+  // X4: Also wake on GPIO2 (Volume Down button pulls it LOW via resistor ladder)
+  // Volume Down ≈ ADC 3 (near GND), so LOW wakeup works.
+  // Volume Up ≈ ADC 2205 (~1.77V) won't trigger LOW — only Volume Down wakes the device.
+  // GPIO2 has no pull-up on the resistor ladder, so it's normally floating HIGH via internal pull-up.
+  // We enable internal pull-up before sleep so it stays HIGH when no button is pressed.
+  pinMode(X4_GPIO2_PIN, INPUT_PULLUP);
+  esp_deep_sleep_enable_gpio_wakeup((1 << PIN_INTERRUPT) | (1 << X4_GPIO2_PIN), ESP_GPIO_WAKEUP_GPIO_LOW);
+#else
   esp_deep_sleep_enable_gpio_wakeup(1 << PIN_INTERRUPT, ESP_GPIO_WAKEUP_GPIO_LOW);
+#endif
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_INTERRUPT, 0);
 #else
@@ -2821,7 +2846,12 @@ static void goToSleepButtonOnly(void)
   #define BUTTON_PIN_BITMASK_BTN(GPIO) (1ULL << GPIO)
   esp_sleep_enable_ext1_wakeup(BUTTON_PIN_BITMASK_BTN(PIN_INTERRUPT), ESP_EXT1_WAKEUP_ALL_LOW);
 #elif defined( CONFIG_IDF_TARGET_ESP32C3 ) || defined ( CONFIG_IDF_TARGET_ESP32C5 )
+#ifdef BOARD_XTEINK_X4
+  pinMode(X4_GPIO2_PIN, INPUT_PULLUP);
+  esp_deep_sleep_enable_gpio_wakeup((1 << PIN_INTERRUPT) | (1 << X4_GPIO2_PIN), ESP_GPIO_WAKEUP_GPIO_LOW);
+#else
   esp_deep_sleep_enable_gpio_wakeup(1 << PIN_INTERRUPT, ESP_GPIO_WAKEUP_GPIO_LOW);
+#endif
 #elif CONFIG_IDF_TARGET_ESP32S3
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_INTERRUPT, 0);
 #else
