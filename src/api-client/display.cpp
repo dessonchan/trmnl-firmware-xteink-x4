@@ -11,8 +11,16 @@
 #include <misc/sensor.h>
 #include <trmnl_log.h>
 
+#ifdef BOARD_XTEINK_X4
+#include <buttons_config.h>
+#endif
+
 void addHeaders(HTTPClient &https, ApiDisplayInputs &inputs) {
-  HttpHeaderList headers = buildDisplayHeaders(inputs);
+  HttpHeaderList headers = buildDisplayHeaders(inputs
+#ifdef BOARD_XTEINK_X4
+    , x4_action_buttons_list()
+#endif
+  );
 
   char *szTemp;
   if (sensor().buildSensorsHeader(&szTemp)) {

@@ -30,6 +30,7 @@
 #include "api-client/submit_log.h"
 #ifdef BOARD_XTEINK_X4
 #include "x4_buttons.h"
+#include "buttons_config.h"
 #endif
 #include <api-client/setup.h>
 #include <special_function.h>
@@ -40,6 +41,7 @@
 #include <SPIFFS.h>
 #include "http_client.h"
 #include <api-client/display.h>
+#include <api-client/action.h>
 #include <api-client/request_headers.h>
 #include "driver/gpio.h"
 #include "esp_flash.h"
@@ -81,6 +83,7 @@ static float vBatt;
 
 static https_request_err_e downloadAndShow(); // download and show the image
 static https_request_err_e handleApiDisplayResponse(ApiDisplayResponse &apiResponse);
+ApiDisplayInputs loadApiDisplayInputs(Preferences &preferences); // forward declaration
 static void resetDeviceCredentials(void);            // reset device credentials API key, Friendly ID, Wi-Fi SSID and password
 void goToSleep(void);                         // sleep preparing
 static void goToSleepButtonOnly(void);               // sleep until button press, no timer
@@ -930,6 +933,59 @@ void bl_init(void)
     case X4_BTN_VOLUME_DOWN:
       show_cached_image_by_offset(+1);
       break;
+    case X4_BTN_BACK:
+    case X4_BTN_RIGHT:
+    case X4_BTN_LEFT:
+    case X4_BTN_CONFIRM:
+    {
+      // Action button pressed: call /api/action/<name>, download image, display, sleep
+      const char *action_name = x4_get_action_name(x4btn);
+      Log_info("X4: Action button '%s' pressed after wakeup", action_name);
+      // Connect WiFi for API call
+      WiFi.mode(WIFI_STA);
+      if (connectWithSavedCredentials())
+      {
+        ApiDisplayInputs inputs = loadApiDisplayInputs(preferences);
+        ApiActionResult result = fetchApiAction(inputs, action_name);
+        if (result.no_content)
+        {
+          Log_info("X4: Action '%s' — no update (204), showing cached image", action_name);
+          show_cached_image_by_offset(0); // show current image
+        }
+        else if (result.error == https_request_err_e::HTTPS_NO_ERR)
+        {
+          Log_info("X4: Action '%s' — got response, downloading image", action_name);
+          if (result.response.image_url.length() > 0)
+          {
+            strncpy(filename, result.response.image_url.c_str(), sizeof(filename) - 1);
+            filename[sizeof(filename) - 1] = '\0';
+            status = true;
+            new_filename = result.response.filename;
+            if (result.response.refresh_rate > 0)
+            {
+              refreshInterval.applyServerRate(result.response.refresh_rate);
+            }
+            downloadAndShow();
+          }
+          else
+          {
+            Log_info("X4: Action '%s' — no image_url, showing cached image", action_name);
+            show_cached_image_by_offset(0);
+          }
+        }
+        else
+        {
+          Log_error("X4: Action '%s' failed, showing cached image", action_name);
+          show_cached_image_by_offset(0);
+        }
+      }
+      else
+      {
+        Log_error("X4: WiFi connection failed for action, showing cached image");
+        show_cached_image_by_offset(0);
+      }
+      break;
+    }
     default:
       break;
     }
@@ -1615,7 +1671,11 @@ static https_request_err_e downloadAndShow()
   if (g_modem && WifiCaptivePortal.getLastCredentials().is5GHz)
   {
     Log_info("Fetching /api/display via modem (5 GHz path)");
-    String reqHeaders = formatHeaders(buildDisplayHeaders(apiDisplayInputs));
+    String reqHeaders = formatHeaders(buildDisplayHeaders(apiDisplayInputs
+#ifdef BOARD_XTEINK_X4
+      , x4_action_buttons_list()
+#endif
+    ));
 
     auto httpRes = g_modem->httpGet(apiDisplayInputs.baseUrl + "/api/display", "", 0, reqHeaders);
     if (!httpRes.ok)
@@ -2727,6 +2787,59 @@ void goToSleep(void)
           cooldown_until = millis() + X4_BUTTON_COOLDOWN_MS;
         }
       }
+#ifdef BOARD_XTEINK_X4
+      else if (x4_is_action_button(btn))
+      {
+        if (millis() >= cooldown_until)
+        {
+          const char *action_name = x4_get_action_name(btn);
+          Log_info("X4: Action button '%s' pressed", action_name);
+
+          // Reconnect WiFi if needed
+          if (WiFi.status() != WL_CONNECTED)
+          {
+            Log_info("X4: Reconnecting WiFi for action");
+            WiFi.mode(WIFI_STA);
+            connectWithSavedCredentials();
+          }
+
+          ApiDisplayInputs inputs = loadApiDisplayInputs(preferences);
+          ApiActionResult result = fetchApiAction(inputs, action_name);
+
+          if (result.no_content)
+          {
+            Log_info("X4: Action '%s' — no update (204)", action_name);
+          }
+          else if (result.error == https_request_err_e::HTTPS_NO_ERR)
+          {
+            // Same format as /api/display — process image download
+            Log_info("X4: Action '%s' — got response, downloading image", action_name);
+            if (result.response.image_url.length() > 0)
+            {
+              // Re-use the download logic from downloadAndShow
+              strncpy(filename, result.response.image_url.c_str(), sizeof(filename) - 1);
+              filename[sizeof(filename) - 1] = '\0';
+              status = true;
+              new_filename = result.response.filename;
+              if (result.response.refresh_rate > 0)
+              {
+                refreshInterval.applyServerRate(result.response.refresh_rate);
+              }
+              https_request_err_e dl_result = downloadAndShow();
+              Log_info("X4: Action '%s' download result=%d", action_name, dl_result);
+            }
+            // Reset refresh timer — action replaces the next scheduled refresh
+            last_refresh = millis();
+          }
+          else
+          {
+            Log_error("X4: Action '%s' failed, error: %s", action_name, result.error_detail.c_str());
+          }
+
+          cooldown_until = millis() + X4_ACTION_COOLDOWN_MS;
+        }
+      }
+#endif
 
       // Check if it's time for a scheduled API refresh — do it in-place
       if (millis() - last_refresh >= refresh_interval_ms)

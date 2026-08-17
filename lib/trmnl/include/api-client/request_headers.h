@@ -15,7 +15,7 @@ using HttpHeader = std::pair<String, String>;
 using HttpHeaderList = std::vector<HttpHeader>;
 
 // Canonical header sets for each request endpoint
-HttpHeaderList buildDisplayHeaders(const ApiDisplayInputs &inputs);
+HttpHeaderList buildDisplayHeaders(const ApiDisplayInputs &inputs, const String &buttons = "");
 HttpHeaderList buildSetupHeaders(const ApiSetupInputs &inputs);
 HttpHeaderList buildLogHeaders(const ApiLogInputs &inputs);
 

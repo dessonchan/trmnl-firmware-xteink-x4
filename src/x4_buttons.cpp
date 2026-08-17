@@ -24,43 +24,46 @@ bool x4_is_usb_connected(void)
   return digitalRead(X4_USB_DETECT_PIN) == HIGH;
 }
 
+int x4_read_adc(int gpio)
+{
+  return analogRead(gpio);
+}
+
 X4Button x4_read_button(void)
 {
-  int btn1 = analogRead(X4_GPIO1_PIN);
-  int btn2 = analogRead(X4_GPIO2_PIN);
+  int adc1 = analogRead(X4_GPIO1_PIN);
+  int adc2 = analogRead(X4_GPIO2_PIN);
 
-  // Check GPIO2 first (Volume Up/Down — our primary navigation buttons)
-  // Volume Down has the lowest value (~3), so check it first
-  if (btn2 < X4_BTN_VOLDN_THRESH + X4_ADC_TOLERANCE)
+  // Discard first ADC readings to flush sample-and-hold charge
+  // (battery monitor on GPIO0 shares ADC1 — same technique as papyrix-reader)
+  (void)analogRead(X4_GPIO1_PIN);
+  (void)analogRead(X4_GPIO2_PIN);
+  adc1 = analogRead(X4_GPIO1_PIN);
+  adc2 = analogRead(X4_GPIO2_PIN);
+
+  // Check for idle state first — ADC above threshold means no button pressed
+  if (adc1 > X4_ADC_NO_BUTTON && adc2 > X4_ADC_NO_BUTTON)
   {
-    return X4_BTN_VOLUME_DOWN;
-  }
-  // Volume Up (~2205) — use simple < check (matches sample code logic)
-  if (btn2 < X4_BTN_VOLUP_THRESH + X4_ADC_TOLERANCE)
-  {
-    return X4_BTN_VOLUME_UP;
+    return X4_BTN_NONE;
   }
 
-  // Check GPIO1 (4 buttons on resistor ladder)
-  // Right has the lowest value (~3)
-  if (btn1 < X4_BTN_RIGHT_THRESH + X4_ADC_TOLERANCE)
+  // Iterate through the button config table to find a match.
+  // Range check: adc_min < adc <= adc_max (exclusive lower, inclusive upper)
+  for (int i = 0; i < X4_BUTTON_COUNT; i++)
   {
-    return X4_BTN_RIGHT;
-  }
-  // Left (~1470)
-  if (btn1 < X4_BTN_LEFT_THRESH + X4_ADC_TOLERANCE)
-  {
-    return X4_BTN_LEFT;
-  }
-  // Confirm (~2655)
-  if (btn1 < X4_BTN_CONFIRM_THRESH + X4_ADC_TOLERANCE)
-  {
-    return X4_BTN_CONFIRM;
-  }
-  // Back (~3470)
-  if (btn1 < X4_BTN_BACK_THRESH + X4_ADC_TOLERANCE)
-  {
-    return X4_BTN_BACK;
+    const ButtonConfig &cfg = X4_BUTTONS[i];
+    int adc = (cfg.gpio == X4_GPIO1_PIN) ? adc1 : adc2;
+
+    if (adc > cfg.adc_min && adc <= cfg.adc_max)
+    {
+      // Map config name back to X4Button enum
+      if (strcmp(cfg.name, "back") == 0)        return X4_BTN_BACK;
+      if (strcmp(cfg.name, "right") == 0)       return X4_BTN_RIGHT;
+      if (strcmp(cfg.name, "confirm") == 0)    return X4_BTN_CONFIRM;
+      if (strcmp(cfg.name, "left") == 0)        return X4_BTN_LEFT;
+      if (strcmp(cfg.name, "volume_up") == 0)   return X4_BTN_VOLUME_UP;
+      if (strcmp(cfg.name, "volume_down") == 0)  return X4_BTN_VOLUME_DOWN;
+    }
   }
 
   return X4_BTN_NONE;
@@ -87,9 +90,14 @@ X4Button x4_poll_buttons_after_wakeup(void)
           const char *name = "Unknown";
           if (current == X4_BTN_VOLUME_UP) name = "Volume Up";
           else if (current == X4_BTN_VOLUME_DOWN) name = "Volume Down";
+          else if (current == X4_BTN_RIGHT) name = "Right";
+          else if (current == X4_BTN_LEFT) name = "Left";
+          else if (current == X4_BTN_CONFIRM) name = "Confirm";
+          else if (current == X4_BTN_BACK) name = "Back";
           Log_info("X4 button: %s pressed", name);
 
-          if (current == X4_BTN_VOLUME_UP || current == X4_BTN_VOLUME_DOWN)
+          // Return any navigation or action button (not just Volume)
+          if (current != X4_BTN_NONE)
           {
             return current;
           }
@@ -136,4 +144,31 @@ void x4_awake_loop_exit(void)
 {
   x4_in_awake_loop = false;
 }
+
+bool x4_is_action_button(X4Button btn)
+{
+  switch (btn)
+  {
+  case X4_BTN_BACK:
+  case X4_BTN_RIGHT:
+  case X4_BTN_LEFT:
+  case X4_BTN_CONFIRM:
+    return true;
+  default:
+    return false;
+  }
+}
+
+const char* x4_get_action_name(X4Button btn)
+{
+  switch (btn)
+  {
+  case X4_BTN_BACK:    return "back";
+  case X4_BTN_RIGHT:   return "right";
+  case X4_BTN_LEFT:    return "left";
+  case X4_BTN_CONFIRM: return "confirm";
+  default:             return nullptr;
+  }
+}
+
 #endif // BOARD_XTEINK_X4

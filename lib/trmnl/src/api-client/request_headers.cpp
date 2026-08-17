@@ -1,7 +1,7 @@
 #include <api-client/request_headers.h>
 #include <trmnl_log.h>
 
-HttpHeaderList buildDisplayHeaders(const ApiDisplayInputs &inputs) {
+HttpHeaderList buildDisplayHeaders(const ApiDisplayInputs &inputs, const String &buttons) {
   HttpHeaderList headers;
   headers.push_back({"ID", inputs.macAddress});
   headers.push_back({"Content-Type", "application/json"});
@@ -37,6 +37,11 @@ HttpHeaderList buildDisplayHeaders(const ApiDisplayInputs &inputs) {
   headers.push_back({"Height", String(inputs.displayHeight)});
 
   if (inputs.specialFunction != SF_NONE) headers.push_back({"special_function", "true"});
+
+  // Report available action buttons to server (if any)
+  if (buttons.length() > 0) {
+    headers.push_back({"X-Buttons", buttons});
+  }
 
   return headers;
 }
