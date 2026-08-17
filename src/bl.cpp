@@ -85,6 +85,12 @@ static https_request_err_e downloadAndShow(); // download and show the image
 static https_request_err_e handleApiDisplayResponse(ApiDisplayResponse &apiResponse);
 ApiDisplayInputs loadApiDisplayInputs(Preferences &preferences); // forward declaration
 static void resetDeviceCredentials(void);            // reset device credentials API key, Friendly ID, Wi-Fi SSID and password
+
+#ifdef BOARD_XTEINK_X4
+// When set, downloadAndShow() skips fetchApiDisplay() and uses the pre-populated
+// apiDisplayResult instead. Used by action button flow to avoid re-fetching /api/display.
+static bool skip_display_fetch = false;
+#endif
 void goToSleep(void);                         // sleep preparing
 static void goToSleepButtonOnly(void);               // sleep until button press, no timer
 static void submitStoredLogs(void);
@@ -957,14 +963,9 @@ void bl_init(void)
           Log_info("X4: Action '%s' — got response, downloading image", action_name);
           if (result.response.image_url.length() > 0)
           {
-            strncpy(filename, result.response.image_url.c_str(), sizeof(filename) - 1);
-            filename[sizeof(filename) - 1] = '\0';
-            status = true;
-            new_filename = result.response.filename;
-            if (result.response.refresh_rate > 0)
-            {
-              refreshInterval.applyServerRate(result.response.refresh_rate);
-            }
+            // Populate apiDisplayResult with action response, skip re-fetching /api/display
+            apiDisplayResult = {HTTPS_NO_ERR, result.response, ""};
+            skip_display_fetch = true;
             downloadAndShow();
           }
           else
@@ -1667,6 +1668,16 @@ static https_request_err_e downloadAndShow()
   bmp_err_e bmp_res = BMP_NOT_BMP;
   auto apiDisplayInputs = loadApiDisplayInputs(preferences);
 
+#ifdef BOARD_XTEINK_X4
+  // When action button provides the response, skip re-fetching /api/display
+  if (skip_display_fetch)
+  {
+    Log_info("X4: Skipping /api/display fetch, using pre-populated response");
+    skip_display_fetch = false; // reset for next call
+  }
+  else
+#endif
+  {
 #ifdef BOARD_TRMNL_X
   if (g_modem && WifiCaptivePortal.getLastCredentials().is5GHz)
   {
@@ -1703,6 +1714,7 @@ static https_request_err_e downloadAndShow()
       Log_error_serial("Connection attempt %d/5 failed: %s", attempt, apiDisplayResult.error_detail.c_str());
       if (attempt < 5) delay(2000);
     }
+  }
   }
 
   if (apiDisplayResult.error != HTTPS_NO_ERR)
@@ -2816,15 +2828,9 @@ void goToSleep(void)
             Log_info("X4: Action '%s' — got response, downloading image", action_name);
             if (result.response.image_url.length() > 0)
             {
-              // Re-use the download logic from downloadAndShow
-              strncpy(filename, result.response.image_url.c_str(), sizeof(filename) - 1);
-              filename[sizeof(filename) - 1] = '\0';
-              status = true;
-              new_filename = result.response.filename;
-              if (result.response.refresh_rate > 0)
-              {
-                refreshInterval.applyServerRate(result.response.refresh_rate);
-              }
+              // Populate apiDisplayResult with action response, skip re-fetching /api/display
+              apiDisplayResult = {HTTPS_NO_ERR, result.response, ""};
+              skip_display_fetch = true;
               https_request_err_e dl_result = downloadAndShow();
               Log_info("X4: Action '%s' download result=%d", action_name, dl_result);
             }
