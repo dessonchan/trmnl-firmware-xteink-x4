@@ -946,13 +946,17 @@ void bl_init(void)
     {
       // Action button pressed: call /api/action/<name>, download image, display, sleep
       const char *action_name = x4_get_action_name(x4btn);
+      unsigned long action_start = millis();
       Log_info("X4: Action button '%s' pressed after wakeup", action_name);
       // Connect WiFi for API call
       WiFi.mode(WIFI_STA);
       if (connectWithSavedCredentials())
       {
+        Log_info("X4: WiFi connected in %lums", millis() - action_start);
         ApiDisplayInputs inputs = loadApiDisplayInputs(preferences);
+        unsigned long api_start = millis();
         ApiActionResult result = fetchApiAction(inputs, action_name);
+        Log_info("X4: Action '%s' API call took %lums", action_name, millis() - api_start);
         if (result.no_content)
         {
           Log_info("X4: Action '%s' — no update (204), showing cached image", action_name);
@@ -966,7 +970,9 @@ void bl_init(void)
             // Populate apiDisplayResult with action response, skip re-fetching /api/display
             apiDisplayResult = {HTTPS_NO_ERR, result.response, ""};
             skip_display_fetch = true;
+            unsigned long dl_start = millis();
             downloadAndShow();
+            Log_info("X4: Action '%s' download took %lums", action_name, millis() - dl_start);
           }
           else
           {
@@ -1670,6 +1676,7 @@ static https_request_err_e downloadAndShow()
 
 #ifdef BOARD_XTEINK_X4
   // When action button provides the response, skip re-fetching /api/display
+  // and skip redundant loadApiDisplayInputs (we already have the response)
   if (skip_display_fetch)
   {
     Log_info("X4: Skipping /api/display fetch, using pre-populated response");
@@ -2772,6 +2779,8 @@ void goToSleep(void)
     unsigned long cooldown_until = 0;
     unsigned long last_refresh = millis();
     uint32_t refresh_interval_ms = refreshInterval.seconds() * 1000UL;
+    // Pre-load API inputs to avoid NVS reads on every button press
+    ApiDisplayInputs cached_inputs = loadApiDisplayInputs(preferences);
 
     while (true)
     {
@@ -2805,6 +2814,7 @@ void goToSleep(void)
         if (millis() >= cooldown_until)
         {
           const char *action_name = x4_get_action_name(btn);
+          unsigned long action_start = millis();
           Log_info("X4: Action button '%s' pressed", action_name);
 
           // Reconnect WiFi if needed
@@ -2813,10 +2823,13 @@ void goToSleep(void)
             Log_info("X4: Reconnecting WiFi for action");
             WiFi.mode(WIFI_STA);
             connectWithSavedCredentials();
+            Log_info("X4: WiFi reconnected in %lums", millis() - action_start);
           }
 
-          ApiDisplayInputs inputs = loadApiDisplayInputs(preferences);
-          ApiActionResult result = fetchApiAction(inputs, action_name);
+          // Use pre-loaded inputs to avoid NVS reads on every button press
+          unsigned long api_start = millis();
+          ApiActionResult result = fetchApiAction(cached_inputs, action_name);
+          Log_info("X4: Action '%s' API call took %lums", action_name, millis() - api_start);
 
           if (result.no_content)
           {
@@ -2831,11 +2844,14 @@ void goToSleep(void)
               // Populate apiDisplayResult with action response, skip re-fetching /api/display
               apiDisplayResult = {HTTPS_NO_ERR, result.response, ""};
               skip_display_fetch = true;
+              unsigned long dl_start = millis();
               https_request_err_e dl_result = downloadAndShow();
-              Log_info("X4: Action '%s' download result=%d", action_name, dl_result);
+              Log_info("X4: Action '%s' download took %lums, result=%d", action_name, millis() - dl_start, dl_result);
             }
             // Reset refresh timer — action replaces the next scheduled refresh
             last_refresh = millis();
+            // Refresh cached inputs in case server changed refresh_rate
+            cached_inputs = loadApiDisplayInputs(preferences);
           }
           else
           {
@@ -2862,8 +2878,9 @@ void goToSleep(void)
         https_request_err_e result = downloadAndShow();
         Log_info("X4: API refresh result=%d", result);
         last_refresh = millis();
-        // Re-read refresh interval in case server changed it
+        // Re-read refresh interval and cached inputs in case server changed them
         refresh_interval_ms = refreshInterval.seconds() * 1000UL;
+        cached_inputs = loadApiDisplayInputs(preferences);
       }
 
       delay(X4_AWAKE_POLL_INTERVAL_MS);
