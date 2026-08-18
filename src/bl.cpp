@@ -1676,10 +1676,12 @@ static https_request_err_e downloadAndShow()
 
 #ifdef BOARD_XTEINK_X4
   // When action button provides the response, skip re-fetching /api/display
-  // and skip redundant loadApiDisplayInputs (we already have the response)
+  // and skip SPIFFS purge (too slow during action button flow)
+  bool skip_purge = false;
   if (skip_display_fetch)
   {
     Log_info("X4: Skipping /api/display fetch, using pre-populated response");
+    skip_purge = true;        // mark that we came from action button
     skip_display_fetch = false; // reset for next call
   }
   else
@@ -2028,7 +2030,12 @@ static https_request_err_e downloadAndShow()
             char szTemp[36];
             filesystem_fix_filename(apiDisplayResult.response.filename.c_str(), szTemp);
             Log.info("%s [%d]: Writing %s to SPIFFS\r\n", __FILE__, __LINE__, szTemp);
-            filesystem_purge_old_file(szTemp); // try to delete the old version or older than 24h
+#ifdef BOARD_XTEINK_X4
+            // Skip SPIFFS purge during action button flow — it's too slow (iterates all files)
+            // Purge will happen on the next scheduled /api/display refresh instead
+            if (!skip_purge)
+#endif
+              filesystem_purge_old_file(szTemp); // try to delete the old version or older than 24h
             writeImageToFile(szTemp, buffer, content_size);
             Log.info("%s [%d]: Decoding %s\r\n", __FILE__, __LINE__, (isPNG) ? "png" : "jpeg");
             display_show_image(buffer, content_size, true);
